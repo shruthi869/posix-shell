@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 
+#include "parser.h"
 #include "prompt.h"
 
 // REPL: Read a line, Evaluate it, Print the result, Loop.
@@ -16,9 +17,17 @@ int main() {
             break;
         }
 
-        if (line == "exit") break;   // the parser (next part) will handle spaces/tabs
+        CommandList list;
+        std::string err;
+        if (!parseLine(line, list, err)) {
+            std::cerr << "shell: " << err << "\n";
+            continue;
+        }
+        if (list.empty()) continue;   // blank line or only spaces
 
-        std::cout << "you typed: " << line << "\n";   // placeholder until the executor exists
+        if (list[0].cmds[0].argv[0] == "exit") break;   // becomes a proper built-in later
+
+        std::cout << describe(list);   // placeholder until the executor exists
     }
     return 0;
 }
