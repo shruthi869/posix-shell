@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "builtins.h"
 #include "jobs.h"
 
 // Run one external program (ls, gedit, sleep, ./a.out ...).
@@ -65,6 +66,18 @@ void executeLine(const CommandList& list) {
             std::cerr << "shell: pipes and redirection come in Part 5\n";
             continue;
         }
-        runExternal(p.cmds[0], p.background);
+        const Command& cmd = p.cmds[0];
+
+        // Built-ins run INSIDE the shell process (no fork). This is required
+        // for cd and exit: a child's chdir/exit would not affect the shell.
+        // The spec says built-ins need not support '&', so it is ignored.
+        if (BuiltinFn fn = findBuiltin(cmd.argv[0])) {
+            fn(cmd.argv);
+            fflush(stdout);
+            if (shellShouldExit()) return;   // don't run anything after "exit"
+            continue;
+        }
+
+        runExternal(cmd, p.background);
     }
 }

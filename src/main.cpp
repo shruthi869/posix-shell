@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 
+#include "builtins.h"
 #include "executor.h"
 #include "jobs.h"
 #include "parser.h"
@@ -30,9 +31,8 @@ int main() {
         }
         if (list.empty()) continue;   // blank line or only spaces
 
-        if (list[0].cmds[0].argv[0] == "exit") break;   // becomes a proper built-in later
-
         executeLine(list);
+        if (shellShouldExit()) break;
     }
     return 0;
 }
