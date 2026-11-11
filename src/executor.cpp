@@ -3,81 +3,198 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
-#include <iostream>
+#include <fcntl.h>      // open, O_* flags
 #include <sys/wait.h>
-#include <unistd.h>
+#include <unistd.h>     // fork, execvp, pipe, dup, dup2, close
 #include <vector>
 
 #include "builtins.h"
 #include "jobs.h"
 
-// Run one external program (ls, gedit, sleep, ./a.out ...).
-static void runExternal(const Command& cmd, bool background) {
-    // Anything still in our output buffer would be copied into the child too.
-    std::cout.flush();
-    fflush(stdout);
+// ---------------------------------------------------------------------------
+// Redirection: point fd 0 (stdin) or fd 1 (stdout) of THIS process at a file.
+//   < file    stdin  <- file   (must exist)
+//   > file    stdout -> file   (create with 0644, truncate)
+//   >> file   stdout -> file   (create with 0644, append)
+// Returns false (after printing why) if a file cannot be opened.
+// ---------------------------------------------------------------------------
+static bool applyRedirections(const Command& cmd) {
+    for (const Redirect& r : cmd.redirs) {
+        int fd;
+        int target;
+        if (r.type == Redirect::IN) {
+            fd = open(r.file.c_str(), O_RDONLY);
+            target = STDIN_FILENO;
+        } else if (r.type == Redirect::OUT) {
+            fd = open(r.file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            target = STDOUT_FILENO;
+        } else {
+            fd = open(r.file.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+            target = STDOUT_FILENO;
+        }
+        if (fd < 0) {
+            fprintf(stderr, "%s: %s\n", r.file.c_str(), strerror(errno));
+            return false;
+        }
+        // dup2(fd, target): make `target` refer to the same open file as `fd`.
+        if (dup2(fd, target) < 0) {
+            perror("dup2");
+            close(fd);
+            return false;
+        }
+        close(fd);   // the file stays open through `target`; drop the extra copy
+    }
+    return true;
+}
 
-    pid_t pid = fork();   // duplicate this process: returns twice
-    if (pid < 0) {
-        perror("fork");
+// ---------------------------------------------------------------------------
+// In a CHILD process: run a built-in or exec an external program. Never returns.
+// ---------------------------------------------------------------------------
+[[noreturn]] static void execCommand(const Command& cmd) {
+    if (BuiltinFn fn = findBuiltin(cmd.argv[0])) {   // built-in inside a pipeline
+        int status = fn(cmd.argv);
+        fflush(stdout);
+        _exit(status);
+    }
+
+    std::vector<char*> argv;
+    for (const auto& a : cmd.argv) argv.push_back(const_cast<char*>(a.c_str()));
+    argv.push_back(nullptr);
+
+    execvp(argv[0], argv.data());   // only returns on failure
+
+    if (errno == ENOENT)
+        fprintf(stderr, "%s: command not found\n", argv[0]);
+    else
+        fprintf(stderr, "%s: %s\n", argv[0], strerror(errno));
+    _exit(127);
+}
+
+// ---------------------------------------------------------------------------
+// A single built-in with no pipe runs in the shell itself (so cd/exit work).
+// If it has redirections, temporarily swap the shell's stdin/stdout, then
+// put the originals back.
+// ---------------------------------------------------------------------------
+static void runBuiltinInShell(BuiltinFn fn, const Command& cmd) {
+    if (cmd.redirs.empty()) {
+        fn(cmd.argv);
+        fflush(stdout);
         return;
     }
 
-    if (pid == 0) {
-        // ---------------- CHILD ----------------
-        // execvp wants a NULL-terminated array of C strings.
-        std::vector<char*> argv;
-        for (const auto& a : cmd.argv) argv.push_back(const_cast<char*>(a.c_str()));
-        argv.push_back(nullptr);
-
-        // Replace this process's program with the requested one.
-        // 'p' = search the PATH directories; 'v' = arguments as an array.
-        execvp(argv[0], argv.data());
-
-        // Only reached if exec FAILED (on success exec never returns).
-        if (errno == ENOENT)
-            fprintf(stderr, "%s: command not found\n", argv[0]);
-        else
-            fprintf(stderr, "%s: %s\n", argv[0], strerror(errno));
-        _exit(127);   // _exit, not exit: don't run the shell's cleanup/flush in the child
+    fflush(stdout);
+    int savedIn = dup(STDIN_FILENO);    // keep copies of the real terminal fds
+    int savedOut = dup(STDOUT_FILENO);
+    if (savedIn < 0 || savedOut < 0) {
+        perror("dup");
+        if (savedIn >= 0) close(savedIn);
+        if (savedOut >= 0) close(savedOut);
+        return;
     }
 
-    // ---------------- PARENT (the shell) ----------------
-    if (background) {
-        printf("%d\n", pid);          // spec: print the PID of the background process
-        fflush(stdout);
-        addBackgroundJob(pid, cmd.argv[0]);
-        return;                       // don't wait; go straight back to the prompt
-    }
+    if (applyRedirections(cmd)) fn(cmd.argv);
+    fflush(stdout);                      // push output into the file before restoring
 
-    // Foreground: wait for exactly this child to finish.
+    dup2(savedIn, STDIN_FILENO);         // restore the terminal
+    dup2(savedOut, STDOUT_FILENO);
+    close(savedIn);
+    close(savedOut);
+}
+
+static void waitForChild(pid_t pid) {
     int status;
     while (waitpid(pid, &status, 0) < 0) {
-        if (errno != EINTR) {         // EINTR = interrupted by a signal, just retry
+        if (errno != EINTR) {            // EINTR = interrupted by a signal, retry
             perror("waitpid");
-            break;
+            return;
         }
     }
 }
 
+// ---------------------------------------------------------------------------
+// Run "cmd1 | cmd2 | ... | cmdN" (N may be 1).
+//
+// For each command i:
+//   - create a pipe to the NEXT command (except for the last one)
+//   - fork; in the child:
+//       stdin  <- read end of the previous pipe   (if not the first)
+//       stdout -> write end of the new pipe       (if not the last)
+//       then apply its own < > >> (these override the pipe), then exec
+//   - in the parent: close the pipe ends it no longer needs
+//
+// Only two pipe fds are ever open in the shell at once, so N can be anything.
+// ---------------------------------------------------------------------------
+static void runPipeline(const Pipeline& p) {
+    const size_t n = p.cmds.size();
+
+    if (n == 1) {
+        if (BuiltinFn fn = findBuiltin(p.cmds[0].argv[0])) {
+            runBuiltinInShell(fn, p.cmds[0]);   // '&' ignored for built-ins (spec)
+            return;
+        }
+    }
+
+    fflush(stdout);   // don't let buffered output get duplicated into children
+
+    std::vector<pid_t> pids;
+    int prevRead = -1;   // read end of the pipe from the previous command
+
+    for (size_t i = 0; i < n; ++i) {
+        const bool last = (i == n - 1);
+        int fds[2] = {-1, -1};   // fds[0] = read end, fds[1] = write end
+
+        if (!last && pipe(fds) < 0) {
+            perror("pipe");
+            break;
+        }
+
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork");
+            if (!last) { close(fds[0]); close(fds[1]); }
+            break;
+        }
+
+        if (pid == 0) {
+            // ---------------- CHILD i ----------------
+            if (prevRead != -1) {                 // read from the previous command
+                dup2(prevRead, STDIN_FILENO);
+                close(prevRead);
+            }
+            if (!last) {                          // write to the next command
+                close(fds[0]);                    // child i never reads its own pipe
+                dup2(fds[1], STDOUT_FILENO);
+                close(fds[1]);
+            }
+            if (!applyRedirections(p.cmds[i])) _exit(1);
+            execCommand(p.cmds[i]);
+        }
+
+        // ---------------- PARENT ----------------
+        pids.push_back(pid);
+        if (prevRead != -1) close(prevRead);      // child i now owns it
+        if (!last) {
+            close(fds[1]);                        // shell never writes into pipes
+            prevRead = fds[0];                    // next child will read this
+        }
+    }
+    if (prevRead != -1) close(prevRead);          // only if we stopped early
+
+    if (pids.empty()) return;
+
+    if (p.background) {
+        printf("%d\n", pids.back());              // PID of the last process, like bash
+        fflush(stdout);
+        for (size_t i = 0; i < pids.size(); ++i) addBackgroundJob(pids[i], p.cmds[i].argv[0]);
+        return;
+    }
+
+    for (pid_t pid : pids) waitForChild(pid);     // foreground: wait for every stage
+}
+
 void executeLine(const CommandList& list) {
     for (const Pipeline& p : list) {
-        if (p.cmds.size() > 1 || !p.cmds[0].redirs.empty()) {
-            std::cerr << "shell: pipes and redirection come in Part 5\n";
-            continue;
-        }
-        const Command& cmd = p.cmds[0];
-
-        // Built-ins run INSIDE the shell process (no fork). This is required
-        // for cd and exit: a child's chdir/exit would not affect the shell.
-        // The spec says built-ins need not support '&', so it is ignored.
-        if (BuiltinFn fn = findBuiltin(cmd.argv[0])) {
-            fn(cmd.argv);
-            fflush(stdout);
-            if (shellShouldExit()) return;   // don't run anything after "exit"
-            continue;
-        }
-
-        runExternal(cmd, p.background);
+        runPipeline(p);
+        if (shellShouldExit()) return;   // don't run anything after "exit"
     }
 }
