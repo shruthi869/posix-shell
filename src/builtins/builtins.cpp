@@ -19,6 +19,8 @@ BuiltinFn findBuiltin(const std::string& name) {
         {"echo", builtin_echo},
         {"exit", builtin_exit},
         {"ls", builtin_ls},
+        {"pinfo", builtin_pinfo},
+        {"search", builtin_search},
     };
     auto it = table.find(name);
     return it == table.end() ? nullptr : it->second;

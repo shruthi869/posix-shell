@@ -17,3 +17,5 @@ int builtin_pwd(const std::vector<std::string>& argv);
 int builtin_echo(const std::vector<std::string>& argv);
 int builtin_exit(const std::vector<std::string>& argv);
 int builtin_ls(const std::vector<std::string>& argv);
+int builtin_pinfo(const std::vector<std::string>& argv);
+int builtin_search(const std::vector<std::string>& argv);
