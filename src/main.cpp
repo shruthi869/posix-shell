@@ -10,7 +10,7 @@
 // REPL: Read a line, Evaluate it, Print the result, Loop.
 int main() {
     initShellHome();
-    installChildHandler();
+    initJobControl();
 
     std::string line;
     while (true) {

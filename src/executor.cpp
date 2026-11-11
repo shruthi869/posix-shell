@@ -101,14 +101,16 @@ static void runBuiltinInShell(BuiltinFn fn, const Command& cmd) {
     close(savedOut);
 }
 
-static void waitForChild(pid_t pid) {
-    int status;
-    while (waitpid(pid, &status, 0) < 0) {
-        if (errno != EINTR) {            // EINTR = interrupted by a signal, retry
-            perror("waitpid");
-            return;
-        }
+// "cat f | sort > out" -- the text shown by "jobs" and in Stopped messages.
+static std::string pipelineText(const Pipeline& p) {
+    std::string s;
+    for (size_t i = 0; i < p.cmds.size(); ++i) {
+        if (i > 0) s += " | ";
+        for (size_t k = 0; k < p.cmds[i].argv.size(); ++k) s += (k ? " " : "") + p.cmds[i].argv[k];
+        for (const Redirect& r : p.cmds[i].redirs)
+            s += (r.type == Redirect::IN ? " < " : r.type == Redirect::OUT ? " > " : " >> ") + r.file;
     }
+    return s;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,7 +138,8 @@ static void runPipeline(const Pipeline& p) {
 
     fflush(stdout);   // don't let buffered output get duplicated into children
 
-    std::vector<pid_t> pids;
+    std::vector<Proc> procs;
+    pid_t pgid = 0;      // process group of this pipeline = PID of its first process
     int prevRead = -1;   // read end of the pipe from the previous command
 
     for (size_t i = 0; i < n; ++i) {
@@ -157,6 +160,7 @@ static void runPipeline(const Pipeline& p) {
 
         if (pid == 0) {
             // ---------------- CHILD i ----------------
+            prepareChild(pgid, !p.background);    // own process group, default signals
             if (prevRead != -1) {                 // read from the previous command
                 dup2(prevRead, STDIN_FILENO);
                 close(prevRead);
@@ -171,7 +175,9 @@ static void runPipeline(const Pipeline& p) {
         }
 
         // ---------------- PARENT ----------------
-        pids.push_back(pid);
+        if (pgid == 0) pgid = pid;                // first child leads the group
+        setpgid(pid, pgid);                       // also set here: avoids a race with the child
+        procs.push_back({pid, p.cmds[i].argv[0]});
         if (prevRead != -1) close(prevRead);      // child i now owns it
         if (!last) {
             close(fds[1]);                        // shell never writes into pipes
@@ -180,16 +186,12 @@ static void runPipeline(const Pipeline& p) {
     }
     if (prevRead != -1) close(prevRead);          // only if we stopped early
 
-    if (pids.empty()) return;
+    if (procs.empty()) return;
 
-    if (p.background) {
-        printf("%d\n", pids.back());              // PID of the last process, like bash
-        fflush(stdout);
-        for (size_t i = 0; i < pids.size(); ++i) addBackgroundJob(pids[i], p.cmds[i].argv[0]);
-        return;
-    }
-
-    for (pid_t pid : pids) waitForChild(pid);     // foreground: wait for every stage
+    if (p.background)
+        addBackgroundJob(pgid, procs, pipelineText(p));   // prints "[1] <pid>", no waiting
+    else
+        runInForeground(pgid, procs, pipelineText(p));    // give terminal, wait, take it back
 }
 
 void executeLine(const CommandList& list) {

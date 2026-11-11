@@ -19,3 +19,6 @@ int builtin_exit(const std::vector<std::string>& argv);
 int builtin_ls(const std::vector<std::string>& argv);
 int builtin_pinfo(const std::vector<std::string>& argv);
 int builtin_search(const std::vector<std::string>& argv);
+int builtin_jobs(const std::vector<std::string>& argv);   // these three live in jobs.cpp
+int builtin_fg(const std::vector<std::string>& argv);
+int builtin_bg(const std::vector<std::string>& argv);
