@@ -25,6 +25,3 @@ using CommandList = std::vector<Pipeline>;
 
 // Parses one input line. Returns false and sets err on a syntax error.
 bool parseLine(const std::string& line, CommandList& out, std::string& err);
-
-// Human-readable dump of a parsed line (used for testing/debugging).
-std::string describe(const CommandList& list);

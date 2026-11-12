@@ -19,9 +19,12 @@ build/%.o: src/%.cpp
 debug: CXXFLAGS += -g -O0 -fsanitize=address,undefined
 debug: clean $(TARGET)
 
+test: $(TARGET)
+	bash tests/run_tests.sh ./$(TARGET)
+
 clean:
 	rm -rf build $(TARGET)
 
 -include $(DEPS)
 
-.PHONY: all clean debug
+.PHONY: all clean debug test

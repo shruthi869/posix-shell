@@ -97,22 +97,3 @@ bool parseLine(const std::string& line, CommandList& out, std::string& err) {
     }
     return finishPipeline(false);
 }
-
-std::string describe(const CommandList& list) {
-    std::string s;
-    for (size_t p = 0; p < list.size(); ++p) {
-        s += "pipeline " + std::to_string(p + 1) +
-             (list[p].background ? " (background)\n" : " (foreground)\n");
-        for (size_t c = 0; c < list[p].cmds.size(); ++c) {
-            const Command& cmd = list[p].cmds[c];
-            s += "  cmd " + std::to_string(c + 1) + ":";
-            for (const auto& a : cmd.argv) s += " [" + a + "]";
-            for (const auto& r : cmd.redirs) {
-                s += (r.type == Redirect::IN) ? "  < " : (r.type == Redirect::OUT) ? "  > " : "  >> ";
-                s += r.file;
-            }
-            s += "\n";
-        }
-    }
-    return s;
-}

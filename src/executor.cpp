@@ -178,7 +178,10 @@ static void runPipeline(const Pipeline& p) {
         if (pgid == 0) pgid = pid;                // first child leads the group
         setpgid(pid, pgid);                       // also set here: avoids a race with the child
         procs.push_back({pid, p.cmds[i].argv[0]});
-        if (prevRead != -1) close(prevRead);      // child i now owns it
+        if (prevRead != -1) {
+            close(prevRead);                      // child i now owns it
+            prevRead = -1;                        // never close the same number twice
+        }
         if (!last) {
             close(fds[1]);                        // shell never writes into pipes
             prevRead = fds[0];                    // next child will read this
