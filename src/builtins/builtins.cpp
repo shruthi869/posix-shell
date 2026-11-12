@@ -1,5 +1,6 @@
 #include "builtins.h"
 
+#include <algorithm>
 #include <unordered_map>
 
 static bool g_exitRequested = false;
@@ -12,8 +13,8 @@ int builtin_exit(const std::vector<std::string>&) {
 bool shellShouldExit() { return g_exitRequested; }
 
 // Name -> function table. Adding a built-in = write the function + add one line here.
-BuiltinFn findBuiltin(const std::string& name) {
-    static const std::unordered_map<std::string, BuiltinFn> table = {
+static const std::unordered_map<std::string, BuiltinFn>& table() {
+    static const std::unordered_map<std::string, BuiltinFn> t = {
         {"cd", builtin_cd},
         {"pwd", builtin_pwd},
         {"echo", builtin_echo},
@@ -26,6 +27,19 @@ BuiltinFn findBuiltin(const std::string& name) {
         {"bg", builtin_bg},
         {"history", builtin_history},
     };
-    auto it = table.find(name);
-    return it == table.end() ? nullptr : it->second;
+    return t;
+}
+
+BuiltinFn findBuiltin(const std::string& name) {
+    auto it = table().find(name);
+    return it == table().end() ? nullptr : it->second;
+}
+
+const std::vector<std::string>& builtinNames() {
+    static std::vector<std::string> names;
+    if (names.empty()) {
+        for (const auto& kv : table()) names.push_back(kv.first);
+        std::sort(names.begin(), names.end());
+    }
+    return names;
 }

@@ -8,6 +8,9 @@ using BuiltinFn = int (*)(const std::vector<std::string>& argv);
 // Returns the built-in for this name, or nullptr if it is an external program.
 BuiltinFn findBuiltin(const std::string& name);
 
+// Names of all built-ins (used by TAB completion).
+const std::vector<std::string>& builtinNames();
+
 // True once the user has run "exit".
 bool shellShouldExit();
 

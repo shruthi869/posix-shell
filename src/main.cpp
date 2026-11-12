@@ -1,9 +1,11 @@
 #include <iostream>
 #include <string>
+#include <unistd.h>   // isatty
 
 #include "builtins.h"
 #include "executor.h"
 #include "history.h"
+#include "input.h"
 #include "jobs.h"
 #include "parser.h"
 #include "prompt.h"
@@ -18,10 +20,8 @@ int main() {
     while (true) {
         reportFinishedJobs();   // "gedit with pid 1234 exited normally"
 
-        std::cout << buildPrompt() << std::flush;   // flush: no newline after the prompt
-
-        if (!std::getline(std::cin, line)) {   // EOF, i.e. Ctrl-D on an empty line
-            std::cout << "\n";
+        if (!readLine(buildPrompt(), line)) {   // Ctrl-D on an empty line, or end of a script
+            if (!isatty(STDIN_FILENO)) std::cout << "\n";
             break;
         }
 
