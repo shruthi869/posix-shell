@@ -3,6 +3,7 @@
 
 #include "builtins.h"
 #include "executor.h"
+#include "history.h"
 #include "jobs.h"
 #include "parser.h"
 #include "prompt.h"
@@ -11,6 +12,7 @@
 int main() {
     initShellHome();
     initJobControl();
+    loadHistory();
 
     std::string line;
     while (true) {
@@ -22,6 +24,8 @@ int main() {
             std::cout << "\n";
             break;
         }
+
+        addHistory(line);   // before running, so "history" lists itself (as in the spec)
 
         CommandList list;
         std::string err;

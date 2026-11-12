@@ -22,3 +22,4 @@ int builtin_search(const std::vector<std::string>& argv);
 int builtin_jobs(const std::vector<std::string>& argv);   // these three live in jobs.cpp
 int builtin_fg(const std::vector<std::string>& argv);
 int builtin_bg(const std::vector<std::string>& argv);
+int builtin_history(const std::vector<std::string>& argv);   // in history.cpp
